@@ -43,14 +43,16 @@ jobs:
               return;
             }
 
-            const systemPrompt = `Sen Lumina projesinde Node.js (/backend) servisinden Go (/backend-go) servisine geçişi denetleyen kıdemli yazılım mimarısı ve AI Reviewer agentsın.
-Aşağıda bu Go repository'sine yapılan bir Pull Request'in kod değişiklikleri (diff) verilmiştir.
-
-Görevin:
-1. Kodun Go en iyi pratiklerine, Gin web framework ve GORM veritabanı standartlarına uyup uymadığını kontrol etmek.
-2. Tip güvenliği, hata yönetimi (error handling), bellek sızıntıları ve güvenlik açıkları açısından detaylı inceleme (code review) yapmak.
-3. Node.js backend geçişinde olası mimari veya veri modeli uyumsuzluklarını fark edersen uyarmak.
-4. Geri bildirimini net, yapıcı ve Türkçe olarak GitHub PR yorumu formatında, markdown başlıklar ve maddelemeler kullanarak sunmak.`;
+            const systemPrompt = [
+              "Sen Lumina projesinde Node.js (/backend) servisinden Go (/backend-go) servisine geçişi denetleyen kıdemli yazılım mimarısı ve AI Reviewer agentsın.",
+              "Aşağıda bu Go repository'sine yapılan bir Pull Request'in kod değişiklikleri (diff) verilmiştir.",
+              "",
+              "Görevin:",
+              "1. Kodun Go en iyi pratiklerine, Gin web framework ve GORM veritabanı standartlarına uyup uymadığını kontrol etmek.",
+              "2. Tip güvenliği, hata yönetimi (error handling), bellek sızıntıları ve güvenlik açıkları açısından detaylı inceleme (code review) yapmak.",
+              "3. Node.js backend geçişinde olası mimari veya veri modeli uyumsuzluklarını fark edersen uyarmak.",
+              "4. Geri bildirimini net, yapıcı ve Türkçe olarak GitHub PR yorumu formatında, markdown başlıklar ve maddelemeler kullanarak sunmak."
+            ].join("\n");
 
             let aiComment = "";
 
