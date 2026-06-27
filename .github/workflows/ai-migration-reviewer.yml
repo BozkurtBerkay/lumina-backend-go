@@ -5,6 +5,7 @@ on:
     types: [opened, synchronize, reopened]
   issue_comment:
     types: [created]
+  workflow_dispatch:
 
 permissions:
   pull-requests: write
@@ -15,6 +16,7 @@ jobs:
   review:
     if: >
       (github.event_name == 'pull_request') ||
+      (github.event_name == 'workflow_dispatch') ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/review'))
     runs-on: ubuntu-latest
     steps:
@@ -30,7 +32,27 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || vars.OPENAI_API_KEY }}
         with:
           script: |
-            const prNumber = context.issue.number;
+            console.log("=== DEBUG ENV KEYS ===");
+            console.log("Has MINIMAX_API_KEY:", !!process.env.MINIMAX_API_KEY);
+            console.log("Has GEMINI_API_KEY:", !!process.env.GEMINI_API_KEY);
+            console.log("Has OPENAI_API_KEY:", !!process.env.OPENAI_API_KEY);
+
+            let prNumber = context.issue.number;
+            if (!prNumber && context.eventName === 'workflow_dispatch') {
+              const { data: pulls } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open'
+              });
+              if (pulls && pulls.length > 0) {
+                prNumber = pulls[0].number;
+                console.log(`Manual workflow_dispatch triggered. Using latest open PR #${prNumber}`);
+              } else {
+                console.log("No open pull requests found to review.");
+                return;
+              }
+            }
+
             const { data: diff } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
