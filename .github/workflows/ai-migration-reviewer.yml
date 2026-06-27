@@ -8,19 +8,21 @@ on:
 permissions:
   pull-requests: write
   issues: write
-  contents: read
+  contents: write
 
 jobs:
   review:
     if: >
       (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/review'))
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, 'ai-migration-review'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Run AI Reviewer
+      - name: Run AI Reviewer and Automated Fixer
         uses: actions/github-script@v7
         env:
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY || vars.MINIMAX_API_KEY || secrets.MINIMAX_KEY || vars.MINIMAX_KEY }}
@@ -31,8 +33,6 @@ jobs:
           script: |
             console.log("=== DEBUG ENV KEYS ===");
             console.log("Has MINIMAX_API_KEY:", !!process.env.MINIMAX_API_KEY);
-            console.log("Has GEMINI_API_KEY:", !!process.env.GEMINI_API_KEY);
-            console.log("Has OPENAI_API_KEY:", !!process.env.OPENAI_API_KEY);
 
             let prNumber = context.issue.number;
             if (!prNumber && context.eventName === 'workflow_dispatch') {
@@ -49,6 +49,12 @@ jobs:
                 return;
               }
             }
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
 
             const { data: diff } = await github.rest.pulls.get({
               owner: context.repo.owner,
@@ -68,12 +74,25 @@ jobs:
               "",
               "Görevin:",
               "1. Kodun Go en iyi pratiklerine, Gin web framework ve GORM veritabanı standartlarına uyup uymadığını kontrol etmek.",
-              "2. Tip güvenliği, hata yönetimi (error handling), bellek sızıntıları ve güvenlik açıkları açısından detaylı inceleme (code review) yapmak.",
+              "2. Tip güvenliği, hata yönetimi (error handling), bellek sızıntıları, nil pointer panikleri ve güvenlik açıkları açısından detaylı inceleme yapmak.",
               "3. Node.js backend geçişinde olası mimari veya veri modeli uyumsuzluklarını fark edersen uyarmak.",
-              "4. Geri bildirimini net, yapıcı ve Türkçe olarak GitHub PR yorumu formatında, markdown başlıklar ve maddelemeler kullanarak sunmak."
+              "",
+              "ÖNEMLİ ÇIKTI FORMATI:",
+              "Yanıtını YALNIZCA geçerli bir JSON nesnesi (object) olarak vermelisin. JSON dışında hiçbir ön veya arka açıklama yazma.",
+              "JSON şeması tam olarak şu şekilde olmalıdır:",
+              "{",
+              '  "review_comment": "### 🤖 Lumina AI Migration Reviewer\\n\\nDetaylı markdown inceleme yorumun...",',
+              '  "fixes": [',
+              '    {',
+              '      "file_path": "düzeltilen_dosyanin_yolu/ornek.go",',
+              '      "fixed_content": "dosyanın baştan sona eksiksiz, düzeltilmiş tam içeriği..."',
+              '    }',
+              '  ]',
+              "}",
+              "Kural: Sadece gerçekten KRİTİK bir hata (panik riski, güvenlik açığı, mantık hatası) tespit edersen 'fixes' listesine dosya ekle. Küçük stil veya öneri konuları için dosya düzeltmesi gönderme, sadece yorumda belirt. Eğer kritik bir hata yoksa 'fixes': [] olarak bırak."
             ].join("\n");
 
-            let aiComment = "";
+            let aiRawText = "";
 
             if (process.env.MINIMAX_API_KEY) {
               const modelName = process.env.MINIMAX_MODEL || "MiniMax-M3";
@@ -90,15 +109,16 @@ jobs:
                     { role: "system", content: systemPrompt },
                     { role: "user", content: `Pull Request Diff:\n\`\`\`diff\n${diff.slice(0, 30000)}\n\`\`\`` }
                   ],
-                  max_tokens: 2000
+                  max_tokens: 3500,
+                  response_format: { type: "json_object" }
                 })
               });
               const data = await res.json();
               if (data.error || !data.choices) {
                 console.error("MiniMax API Error:", data);
-                aiComment = `⚠️ **AI Reviewer Hatası (MiniMax):** ${data.error?.message || JSON.stringify(data)}`;
+                aiRawText = JSON.stringify({ review_comment: `⚠️ **AI Reviewer Hatası (MiniMax):** ${data.error?.message || JSON.stringify(data)}`, fixes: [] });
               } else {
-                aiComment = data.choices?.[0]?.message?.content || "İnceleme oluşturulamadı.";
+                aiRawText = data.choices?.[0]?.message?.content || "{}";
               }
             } else if (process.env.GEMINI_API_KEY) {
               console.log("Using Gemini API for review...");
@@ -106,15 +126,16 @@ jobs:
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  contents: [{ parts: [{ text: `${systemPrompt}\n\nPull Request Diff:\n\`\`\`diff\n${diff.slice(0, 30000)}\n\`\`\`` }] }]
+                  contents: [{ parts: [{ text: `${systemPrompt}\n\nPull Request Diff:\n\`\`\`diff\n${diff.slice(0, 30000)}\n\`\`\`` }] }],
+                  generationConfig: { responseMimeType: "application/json" }
                 })
               });
               const data = await res.json();
               if (data.error) {
                 console.error("Gemini API Error:", data.error);
-                aiComment = `⚠️ **AI Reviewer Hatası (Gemini):** ${data.error.message}`;
+                aiRawText = JSON.stringify({ review_comment: `⚠️ **AI Reviewer Hatası (Gemini):** ${data.error.message}`, fixes: [] });
               } else {
-                aiComment = data.candidates?.[0]?.content?.parts?.[0]?.text || "İnceleme oluşturulamadı.";
+                aiRawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
               }
             } else if (process.env.OPENAI_API_KEY) {
               console.log("Using OpenAI API for review...");
@@ -126,6 +147,7 @@ jobs:
                 },
                 body: JSON.stringify({
                   model: "gpt-4o",
+                  response_format: { type: "json_object" },
                   messages: [
                     { role: "system", content: systemPrompt },
                     { role: "user", content: `Pull Request Diff:\n\`\`\`diff\n${diff.slice(0, 30000)}\n\`\`\`` }
@@ -135,19 +157,94 @@ jobs:
               const data = await res.json();
               if (data.error) {
                 console.error("OpenAI API Error:", data.error);
-                aiComment = `⚠️ **AI Reviewer Hatası (OpenAI):** ${data.error.message}`;
+                aiRawText = JSON.stringify({ review_comment: `⚠️ **AI Reviewer Hatası (OpenAI):** ${data.error.message}`, fixes: [] });
               } else {
-                aiComment = data.choices?.[0]?.message?.content || "İnceleme oluşturulamadı.";
+                aiRawText = data.choices?.[0]?.message?.content || "{}";
               }
             } else {
-              aiComment = "⚠️ **AI Reviewer Yapılandırma Hatası:** GitHub Repository Secrets içerisinde `MINIMAX_API_KEY`, `GEMINI_API_KEY` veya `OPENAI_API_KEY` tanımlanmamış. Lütfen repo ayarlarından (`Settings > Secrets and variables > Actions`) bir API anahtarı ekleyin.";
+              aiRawText = JSON.stringify({ review_comment: "⚠️ **AI Reviewer Yapılandırma Hatası:** GitHub Repository Secrets içerisinde `MINIMAX_API_KEY` tanımlanmamış.", fixes: [] });
             }
 
-            const commentBody = `### 🤖 Lumina AI Migration Reviewer\n\n${aiComment}\n\n---\n*Bu inceleme Node.js -> Go geçiş standartlarına göre otomatik oluşturulmuştur.*`;
+            let parsedResult = { review_comment: aiRawText, fixes: [] };
+            try {
+              const jsonMatch = aiRawText.match(/\{[\s\S]*\}/);
+              if (jsonMatch) {
+                parsedResult = JSON.parse(jsonMatch[0]);
+              }
+            } catch (err) {
+              console.log("Could not parse AI response as JSON, using raw text as comment.", err);
+              parsedResult = { review_comment: aiRawText, fixes: [] };
+            }
 
+            const commentBody = `${parsedResult.review_comment || aiRawText}\n\n---\n*Bu inceleme \`ai-migration-review\` komutu ile tetiklenmiştir.*`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: prNumber,
               body: commentBody
             });
+
+            // If critical fixes exist, create a new fix branch and PR
+            if (parsedResult.fixes && Array.isArray(parsedResult.fixes) && parsedResult.fixes.length > 0) {
+              console.log(`Found ${parsedResult.fixes.length} critical fixes from AI. Creating automated fix PR...`);
+              const fs = require('fs');
+              const { execSync } = require('child_process');
+
+              try {
+                execSync('git config --global user.name "github-actions[bot]"');
+                execSync('git config --global user.email "github-actions[bot]@users.noreply.github.com"');
+
+                const headBranch = pr.head.ref;
+                const baseBranch = pr.base.ref || 'main';
+                const timestamp = Math.floor(Date.now() / 1000);
+                const fixBranchName = `ai-fix/pr-${prNumber}-${timestamp}`;
+
+                console.log(`Checking out base head branch: ${headBranch}`);
+                execSync(`git fetch origin ${headBranch}`);
+                execSync(`git checkout -b ${fixBranchName} origin/${headBranch}`);
+
+                let appliedCount = 0;
+                for (const fix of parsedResult.fixes) {
+                  if (fix.file_path && fix.fixed_content) {
+                    console.log(`Applying fix to ${fix.file_path}...`);
+                    fs.writeFileSync(fix.file_path, fix.fixed_content, 'utf8');
+                    execSync(`git add "${fix.file_path}"`);
+                    appliedCount++;
+                  }
+                }
+
+                if (appliedCount > 0) {
+                  const status = execSync('git status --porcelain').toString();
+                  if (status.trim().length > 0) {
+                    execSync(`git commit -m "fix(ai): automated critical remediation for PR #${prNumber}"`);
+                    execSync(`git push origin ${fixBranchName}`);
+
+                    const newPr = await github.rest.pulls.create({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      title: `🤖 AI Fixes for PR #${prNumber}: Critical Remediation`,
+                      head: fixBranchName,
+                      base: baseBranch,
+                      body: `### 🛠️ AI Automated Critical Fixes\n\nBu Pull Request, **PR #${prNumber}** üzerinde yapılan \`ai-migration-review\` incelemesi sırasında tespit edilen kritik bulguları düzeltmek amacıyla otomatik olarak oluşturulmuştur.\n\n**Uygulanan Düzeltme Sayısı:** ${appliedCount} dosya\n\n👉 Lütfen değişiklikleri inceleyin. Bu PR onaylanıp merge edildiğinde düzeltilmiş kod doğrudan **\`${baseBranch}\`** dalına geçecektir.`
+                    });
+
+                    await github.rest.issues.createComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: prNumber,
+                      body: `🚨 **Kritik Hata Düzeltmesi Oluşturuldu!**\n\nAI Reviewer, inceleme sırasında tespit ettiği kritik hatalar için otomatik kod düzeltmelerini uyguladı ve yeni bir Pull Request açtı:\n👉 **PR #${newPr.data.number}: ${newPr.data.html_url}**\n\nBu düzeltmeyi onayladığınızda (approve/merge), kod doğrudan \`${baseBranch}\` dalına geçecektir.`
+                    });
+                  } else {
+                    console.log("No actual code diff produced by fixes.");
+                  }
+                }
+              } catch (err) {
+                console.error("Failed to create automated fix PR:", err);
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: `⚠️ **Otomatik Düzeltme PR'ı Oluşturulamadı:** AI kod düzeltmesi uygulamaya çalışırken bir git/otomasyon hatası oluştu: \`${err.message}\``
+                });
+              }
+            }
