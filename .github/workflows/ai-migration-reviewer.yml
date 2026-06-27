@@ -24,10 +24,10 @@ jobs:
       - name: Run AI Reviewer
         uses: actions/github-script@v7
         env:
-          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY || vars.MINIMAX_API_KEY || secrets.MINIMAX_KEY || vars.MINIMAX_KEY }}
           MINIMAX_MODEL: ${{ vars.MINIMAX_MODEL || 'MiniMax-M3' }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || vars.GEMINI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || vars.OPENAI_API_KEY }}
         with:
           script: |
             const prNumber = context.issue.number;
