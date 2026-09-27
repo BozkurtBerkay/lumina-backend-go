@@ -22,6 +22,15 @@ func SetupRouter(
 		c.JSON(200, gin.H{"message": "Lumina Go API is running smoothly."})
 	})
 
+	// System status check endpoint
+	r.GET("/status", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"service": "lumina-backend-go",
+			"status":  "active",
+			"version": "1.0.0",
+		})
+	})
+
 	api := r.Group("/api")
 	{
 		// Grades
